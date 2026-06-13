@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LANTHORN</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{ "imports": { "three": "./libs/three.module.js" } }
+</script>
+</head>
+<body class="filter-crt">
+
+<canvas id="game"></canvas>
+
+<!-- retro post overlays -->
+<canvas id="grain"></canvas>
+<div id="scanlines"></div>
+<div id="vhs">
+  <div id="vhs-track"></div>
+  <div id="vhs-stamp">PLAY ▸ 00:00:00</div>
+</div>
+<div id="vignette"></div>
+<div id="caught"></div>
+<div id="fade"></div>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div id="bars">
+    <div class="bar"><div class="fill hp" id="hpfill"></div></div>
+    <div class="bar"><div class="fill st" id="stfill"></div></div>
+    <div class="bar oilbar"><div class="fill oil" id="oilfill"></div></div>
+    <div class="bar chargebar hidden" id="chargerow"><div class="fill charge" id="chargefill"></div></div>
+  </div>
+  <canvas id="radar" class="hidden" width="180" height="180"></canvas>
+  <div id="prompt"></div>
+  <div id="subtitle"></div>
+  <div id="message"></div>
+  <div id="banner">
+    <div id="banner-name"></div>
+    <div class="banner-rule"></div>
+    <div id="banner-sub"></div>
+  </div>
+  <div id="titlecard">
+    <div id="titlecard-num"></div>
+    <div id="titlecard-name"></div>
+  </div>
+  <div id="dialog">
+    <div id="dialog-name"></div>
+    <div id="dialog-text"></div>
+    <div id="dialog-hint">E &nbsp;·&nbsp; continue</div>
+  </div>
+</div>
+
+<!-- Inventory -->
+<div id="inventory" class="hidden">
+  <div id="inv-head">INVENTORY</div>
+  <div id="inv-body">
+    <div id="inv-grid"></div>
+    <div id="inv-detail">
+      <div id="inv-name"></div>
+      <div class="banner-rule"></div>
+      <div id="inv-desc"></div>
+      <div id="inv-use"></div>
+    </div>
+  </div>
+  <div id="inv-hint">arrows · move &nbsp;&nbsp; E · use &nbsp;&nbsp; Tab · close</div>
+</div>
+
+<!-- Settings -->
+<div id="settings" class="hidden">
+  <div id="settings-head">SETTINGS</div>
+  <div id="settings-list"></div>
+  <div id="settings-hint">↑↓ · select &nbsp;&nbsp; ←→ · change &nbsp;&nbsp; Esc / O · close</div>
+</div>
+
+<!-- big center text (death / ending) -->
+<div id="bigtext" class="hidden">
+  <div id="bigtext-main"></div>
+  <div id="bigtext-sub"></div>
+</div>
+
+<!-- pause -->
+<div id="pause" class="hidden">
+  <div class="pause-inner">
+    <div id="pause-title">PAUSED</div>
+    <div id="pause-sub">click to return to the dark &nbsp;·&nbsp; O for settings</div>
+  </div>
+</div>
+
+<!-- title screen -->
+<div id="title-screen">
+  <div id="title-fog"></div>
+  <div class="title-inner">
+    <div id="title-name">LANTHORN</div>
+    <div id="title-sub">the lift only goes down</div>
+    <div id="title-menu">
+      <div class="title-btn" id="btn-begin">BEGIN THE DESCENT</div>
+      <div class="title-btn hidden" id="btn-continue">CONTINUE</div>
+      <div class="title-btn" id="btn-settings">SETTINGS</div>
+    </div>
+    <div id="title-controls">
+      WASD move · mouse look · SHIFT run · SPACE jump · C crouch · E interact<br>
+      TAB inventory · F beam-lantern · V crank · R wave-drum · O settings
+    </div>
+    <div id="title-note">headphones recommended &nbsp;·&nbsp; there are no jump scares &nbsp;·&nbsp; you are not alone</div>
+  </div>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
