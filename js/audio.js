@@ -199,6 +199,7 @@ export const Sound = {
   },
 
   stopAmbience() {
+    this.dimKind = null;
     if (!this.amb) return;
     const ctx = this.ctx, amb = this.amb;
     amb.bed.gain.cancelScheduledValues(ctx.currentTime);
@@ -207,6 +208,98 @@ export const Sound = {
     const nodes = amb.nodes;
     setTimeout(() => nodes.forEach(n => { try { n.stop(); } catch (e) {} }), 1800);
     this.amb = null;
+  },
+
+  // ------------------------------------------------------- dimension soundpacks
+
+  startDimAmbience(kind) {
+    if (!this.ready) return;
+    this.stopAmbience();
+    const ctx = this.ctx;
+    const amb = this.amb = { nodes: [] };
+    const bed = ctx.createGain(); bed.gain.value = 0; bed.connect(this.master);
+    bed.gain.linearRampToValueAtTime(1, ctx.currentTime + 4);
+    amb.bed = bed;
+    const keep = (...ns) => amb.nodes.push(...ns);
+    this.dimKind = kind;
+    this._dimEventT = 4;
+
+    if (kind === 'field') {
+      // an airy, too-calm major drone with wind
+      [196, 261.6, 329.6, 392].forEach((f, i) => {
+        const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+        const g = ctx.createGain(); g.gain.value = 0.018 / (i * 0.4 + 1);
+        const lfo = ctx.createOscillator(); lfo.frequency.value = 0.05 + i * 0.017;
+        const lg = ctx.createGain(); lg.gain.value = g.gain.value * 0.6;
+        lfo.connect(lg); lg.connect(g.gain);
+        o.connect(g); g.connect(bed); g.connect(this.verb);
+        o.start(); lfo.start(); keep(o, lfo);
+      });
+      const wind = ctx.createBufferSource(); wind.buffer = this.noiseBuf; wind.loop = true;
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 500; bp.Q.value = 1.0;
+      const wg = ctx.createGain(); wg.gain.value = 0.05;
+      const wl = ctx.createOscillator(); wl.frequency.value = 0.06;
+      const wlg = ctx.createGain(); wlg.gain.value = 240;
+      wl.connect(wlg); wlg.connect(bp.frequency);
+      wind.connect(bp); bp.connect(wg); wg.connect(bed);
+      wind.start(); wl.start(); keep(wind, wl);
+
+    } else if (kind === 'stair') {
+      // hollow, reverberant void — a low drone and a cavernous room tone
+      const o1 = ctx.createOscillator(); o1.type = 'sine'; o1.frequency.value = 38;
+      const g1 = ctx.createGain(); g1.gain.value = 0.07;
+      o1.connect(g1); g1.connect(bed);
+      const o2 = ctx.createOscillator(); o2.type = 'triangle'; o2.frequency.value = 57;
+      const g2 = ctx.createGain(); g2.gain.value = 0.02;
+      o2.connect(g2); g2.connect(this.verb);
+      const air = ctx.createBufferSource(); air.buffer = this.noiseBuf; air.loop = true; air.playbackRate.value = 0.5;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 380;
+      const ag = ctx.createGain(); ag.gain.value = 0.03;
+      air.connect(lp); lp.connect(ag); ag.connect(this.verb);
+      o1.start(); o2.start(); air.start(); keep(o1, o2, air);
+
+    } else { // flood
+      const sub = ctx.createOscillator(); sub.type = 'sine'; sub.frequency.value = 30;
+      const sg = ctx.createGain(); sg.gain.value = 0.06;
+      sub.connect(sg); sg.connect(bed);
+      [110, 146.8, 220].forEach((f, i) => {
+        const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+        const g = ctx.createGain(); g.gain.value = 0.014 / (i + 1);
+        const lfo = ctx.createOscillator(); lfo.frequency.value = 0.03 + i * 0.01;
+        const lg = ctx.createGain(); lg.gain.value = g.gain.value;
+        lfo.connect(lg); lg.connect(g.gain);
+        o.connect(g); g.connect(this.verb);
+        o.start(); lfo.start(); keep(o, lfo);
+      });
+      sub.start(); keep(sub);
+    }
+  },
+
+  drip() {
+    if (!this.ready) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(900 + Math.random() * 600, t);
+    o.frequency.exponentialRampToValueAtTime(200, t + 0.12);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.07, t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+    o.connect(g); g.connect(this.master); g.connect(this.verb);
+    o.start(t); o.stop(t + 0.2);
+  },
+
+  farChime() {
+    if (!this.ready) return;
+    const wet = this.ctx.createGain(); wet.gain.value = 0.6; wet.connect(this.verb);
+    const f = [523, 587, 659, 784][Math.floor(Math.random() * 4)];
+    this._tone(wet, { freq: f, dur: 2.4, vol: 0.05, attack: 0.02 });
+  },
+
+  voidGlissando() {
+    if (!this.ready) return;
+    const wet = this.ctx.createGain(); wet.gain.value = 0.7; wet.connect(this.verb);
+    this._tone(wet, { freq: 220, glideTo: 70, glideT: 2.4, dur: 2.6, vol: 0.06, attack: 0.3, type: 'sine' });
   },
 
   // ------------------------------------------------------- primitives
@@ -492,9 +585,89 @@ export const Sound = {
     }
   },
 
+  // ------------------------------------------------------- rain & storm
+
+  startRain() {
+    if (!this.ready || this.rain) return;
+    const ctx = this.ctx;
+    const out = ctx.createGain(); out.gain.value = 0; out.connect(this.master);
+    // hiss: high-passed noise
+    const hiss = ctx.createBufferSource(); hiss.buffer = this.noiseBuf; hiss.loop = true;
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1800;
+    const hg = ctx.createGain(); hg.gain.value = 0.5;
+    hiss.connect(hp); hp.connect(hg); hg.connect(out);
+    // body: band-passed noise, the patter
+    const body = ctx.createBufferSource(); body.buffer = this.noiseBuf; body.loop = true;
+    body.playbackRate.value = 0.8;
+    const bpf = ctx.createBiquadFilter(); bpf.type = 'bandpass'; bpf.frequency.value = 700; bpf.Q.value = 0.6;
+    const bg = ctx.createGain(); bg.gain.value = 0.4;
+    body.connect(bpf); bpf.connect(bg); bg.connect(out);
+    hiss.start(); body.start();
+    this.rain = { out, nodes: [hiss, body] };
+    this._thunderTimer = 8 + Math.random() * 10;
+  },
+
+  setRainLevel(v) {
+    if (!this.rain) return;
+    this.rain.out.gain.setTargetAtTime(0.16 * v, this.ctx.currentTime, 0.6);
+    this._rainLevel = v;
+  },
+
+  stopRain() {
+    if (!this.rain) return;
+    const r = this.rain; this.rain = null;
+    r.out.gain.setTargetAtTime(0, this.ctx.currentTime, 0.5);
+    setTimeout(() => r.nodes.forEach(n => { try { n.stop(); } catch (e) {} }), 1200);
+  },
+
+  // a long rolling rumble that swells and fades — distant, never a crack
+  thunder() {
+    if (!this.ready) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const dur = 3.5 + Math.random() * 2.5;
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0.0001, t);
+    out.gain.linearRampToValueAtTime(0.0001, t + 0.05);
+    out.connect(this.master);
+    out.connect(this.verb);
+    // low rumble
+    const rum = ctx.createBufferSource(); rum.buffer = this.noiseBuf; rum.loop = true;
+    rum.playbackRate.value = 0.25;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 120; lp.Q.value = 0.4;
+    rum.connect(lp); lp.connect(out);
+    // a couple of swells within the roll
+    let tt = t + 0.2;
+    const peak = 0.32 + Math.random() * 0.18;
+    out.gain.linearRampToValueAtTime(peak, tt + 0.8);
+    for (let k = 0; k < 2 + Math.floor(Math.random() * 2); k++) {
+      tt += 0.6 + Math.random() * 0.7;
+      out.gain.linearRampToValueAtTime(peak * (0.5 + Math.random() * 0.5), tt);
+    }
+    out.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    // sub thud underneath
+    this._tone(out, { freq: 38, dur: dur * 0.7, vol: 0.2, attack: 0.4, type: 'sine' });
+    rum.start(t); rum.stop(t + dur + 0.2);
+  },
+
   // ------------------------------------------------------- per-frame
 
   tick(dt, state) {
+    if (this.rain) {
+      this._thunderTimer -= dt;
+      if (this._thunderTimer <= 0) {
+        this._thunderTimer = 14 + Math.random() * 22;
+        if ((this._rainLevel || 0) > 0.4) this.thunder();
+      }
+    }
+    if (this.dimKind) {
+      this._dimEventT -= dt;
+      if (this._dimEventT <= 0) {
+        if (this.dimKind === 'flood') { this.drip(); this._dimEventT = 0.6 + Math.random() * 2.4; }
+        else if (this.dimKind === 'field') { this.farChime(); this._dimEventT = 9 + Math.random() * 12; }
+        else if (this.dimKind === 'stair') { this.voidGlissando(); this._dimEventT = 11 + Math.random() * 14; }
+        else this._dimEventT = 6;
+      }
+    }
     if (!this.ready) return;
     const { dread = 0, caught = false } = state;
     if (dread > 0.45 || caught) {

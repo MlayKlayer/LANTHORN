@@ -118,12 +118,16 @@ export function buildFloor(scene, dng, rng, floorNum, flags) {
       [0, 1, 0],
       [[x0 * UV, z0 * UV], [x0 * UV, z1 * UV], [x1 * UV, z1 * UV], [x1 * UV, z0 * UV]]);
 
-    if (!dng.outdoor) {
+    // ceiling — skipped outdoors, and pierced by the lift shaft
+    if (!dng.outdoor && !(dng.isShaft && dng.isShaft(i, j))) {
       geoFor(th.ceil).quad(
         [x0, h, z0], [x1, h, z0], [x1, h, z1], [x0, h, z1],
         [0, -1, 0],
         [[x0 * UV, z0 * UV], [x1 * UV, z0 * UV], [x1 * UV, z1 * UV], [x0 * UV, z1 * UV]]);
     }
+
+    // forests have no walls — only trees and fog seal the world
+    if (dng.outdoor) continue;
 
     const sides = [
       { di: 1, dj: 0, x: x1, za: z0, zb: z1, n: [-1, 0, 0], axis: 'z' },
@@ -155,6 +159,40 @@ export function buildFloor(scene, dng, rng, floorNum, flags) {
     }
   }
   for (const [tex, geo] of geos) root.add(geo.mesh(matFor(tex)));
+
+  // ---------------------------------------------------------- lift shaft
+  if (!dng.outdoor && dng.shaft) {
+    const si = dng.shaft.i, sj = dng.shaft.j;
+    const h = dng.heightAt(si, sj);
+    const SH = 8;                       // how far the shaft climbs before the dark closes
+    const x0 = si * CELL, x1 = x0 + CELL, z0 = sj * CELL, z1 = z0 + CELL;
+    const shaftMat = matFor('metalWall', { color: 0x6a6a70 });
+    const capMat = flat(0x040405);
+    const shaftGeo = new Geo();
+    const SUV = 0.5;
+    // four inward-facing walls
+    shaftGeo.quad([x0, h, z0], [x0, h, z1], [x0, h + SH, z1], [x0, h + SH, z0], [1, 0, 0],
+      [[z0 * SUV, 0], [z1 * SUV, 0], [z1 * SUV, SH * SUV], [z0 * SUV, SH * SUV]]);
+    shaftGeo.quad([x1, h, z1], [x1, h, z0], [x1, h + SH, z0], [x1, h + SH, z1], [-1, 0, 0],
+      [[z1 * SUV, 0], [z0 * SUV, 0], [z0 * SUV, SH * SUV], [z1 * SUV, SH * SUV]]);
+    shaftGeo.quad([x1, h, z0], [x0, h, z0], [x0, h + SH, z0], [x1, h + SH, z0], [0, 0, 1],
+      [[x1 * SUV, 0], [x0 * SUV, 0], [x0 * SUV, SH * SUV], [x1 * SUV, SH * SUV]]);
+    shaftGeo.quad([x0, h, z1], [x1, h, z1], [x1, h + SH, z1], [x0, h + SH, z1], [0, 0, -1],
+      [[x0 * SUV, 0], [x1 * SUV, 0], [x1 * SUV, SH * SUV], [x0 * SUV, SH * SUV]]);
+    root.add(shaftGeo.mesh(shaftMat));
+    // the dark closes overhead
+    const cap = new THREE.Mesh(new THREE.PlaneGeometry(CELL, CELL), capMat);
+    cap.rotation.x = Math.PI / 2;
+    cap.position.set((x0 + x1) / 2, h + SH - 0.05, (z0 + z1) / 2);
+    root.add(cap);
+    // chains rising out of sight
+    const chainMat = matFor('rust');
+    for (const [cx, cz] of [[x0 + 0.5, z0 + 0.5], [x1 - 0.5, z1 - 0.5]]) {
+      const ch = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, SH, 5), chainMat);
+      ch.position.set(cx, h + SH / 2, cz);
+      root.add(ch);
+    }
+  }
 
   // ---------------------------------------------------------- placement utils
   const occupied = new Set();
@@ -226,6 +264,10 @@ export function buildFloor(scene, dng, rng, floorNum, flags) {
     });
   };
 
+  // reserve the beacon and lift cells up front so NOTHING spawns on top of them
+  if (dng.spawnRoom) occupy(dng.spawnRoom.ci, dng.spawnRoom.cj, 1);
+  if (dng.exitRoom) occupy(dng.exitRoom.ci, dng.exitRoom.cj, 1);
+
   // ---------------------------------------------------------- per-room dressing
   if (!dng.finale) {
     for (const room of dng.rooms) {
@@ -234,8 +276,8 @@ export function buildFloor(scene, dng, rng, floorNum, flags) {
       const isExit = room === dng.exitRoom;
       const th = room.theme;
 
-      // grand pillars in big rooms
-      if (room.w >= 5 && room.h >= 5 && (th === 'gothic' || th === 'industrial')) {
+      // grand pillars in big rooms — never in the spawn or lift rooms
+      if (!isSpawn && !isExit && room.w >= 5 && room.h >= 5 && (th === 'gothic' || th === 'industrial')) {
         for (let pj = room.y + 1; pj < room.y + room.h - 1; pj += 2) {
           for (let pi = room.x + 1; pi < room.x + room.w - 1; pi += 2) {
             if ((pi + pj) % 2 !== 0) continue;
@@ -328,12 +370,20 @@ export function buildFloor(scene, dng, rng, floorNum, flags) {
       FS.colliders.push({ x, z, r: 0.3 });
     };
 
+    const edgeDist = (i, j) => Math.min(i - 2, j - 2, dng.W - 3 - i, dng.H - 3 - j);
     for (let j = 2; j < dng.H - 2; j++) for (let i = 2; i < dng.W - 2; i++) {
       if (dng.isSolid(i, j)) continue;
       if (dng.roomAt(i, j) >= 0) continue;          // clearings stay clear
       if (dng.towerNear(i, j)) continue;            // towers get their footing
       const onPath = dng.pathHas(i, j);
       const { x, z } = cellCenter(i, j);
+      const near = edgeDist(i, j);
+      // a dense wall of pines drowns the world's edge in fog
+      if (near < 4) {
+        const ringN = near === 0 ? 4 : (near < 2 ? 3 : 2);
+        for (let k = 0; k < ringN; k++) addTree(x + rng.range(-1.4, 1.4), z + rng.range(-1.4, 1.4));
+        continue;
+      }
       const treeChance = onPath ? 0.05 : 0.45;
       if (rng.chance(treeChance)) {
         addTree(x + rng.range(-1.1, 1.1), z + rng.range(-1.1, 1.1));
@@ -446,6 +496,8 @@ export function buildFloor(scene, dng, rng, floorNum, flags) {
     // the verger's drum and the winch-wright's lamp wait on the early floors
     if (floorNum <= 3 && !flags.gotRadar) dropIn('radar');
     if (floorNum >= 2 && floorNum <= 4 && !flags.gotCrank) dropIn('cranklamp');
+    // the folded hour — a way sideways out of the world
+    if (floorNum >= 2 && floorNum <= 5 && !flags.gotFolded) dropIn('foldedhour');
 
     // the greatsword waits in early grave-soil
     if (floorNum <= 2 && !flags.gotSword) {

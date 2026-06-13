@@ -1,4 +1,4 @@
-// LANTHORN — the lift only goes down. (revision 2)
+// LANTHORN — the lift only goes down. (revision 3)
 
 import * as THREE from 'three';
 import { RNG } from './rng.js';
@@ -12,6 +12,8 @@ import { tickTextures } from './textures.js';
 import { itemDef, FLOOR_NAMES, ROMAN, FINAL_FLOOR } from './items.js';
 import { Settings, SETTING_DEFS } from './settings.js';
 import { pickLine, LINES, lineCount } from './lines.js';
+import { Rain } from './weather.js';
+import { randomDimension } from './dimensions.js';
 
 const SAVE_KEY = 'lanthorn.save.v1';
 
@@ -75,6 +77,17 @@ let noPointerLock = false;
 let endT = -1;
 let engineLineT = 8;
 
+// weather (rain on open floors)
+const rain = new Rain(scene);
+let rainState = 'dry';      // dry | rising | wet | falling
+let rainTimer = 0;
+let rainLevel = 0;
+let fogFarBase = 24;
+
+// pocket dimensions
+let inDim = null;           // active dimension object, or null
+let dimReturn = null;       // { floor, x, z, yaw }
+
 UI.init();
 UI.applyFilter();
 UI.fade(true, true);
@@ -86,6 +99,20 @@ Settings.onChange((id) => {
   else if (id === 'filter' || id === 'grain') UI.applyFilter();
   else if (id === 'resolution') resize();
   else if (id === 'brightness') ambient.intensity = ambientBase * Settings.get('brightness');
+  else if (id === 'fullscreen') applyFullscreen();
+});
+
+function applyFullscreen() {
+  const want = Settings.get('fullscreen') === 1;
+  const isFs = !!document.fullscreenElement;
+  try {
+    if (want && !isFs) (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen)?.call(document.documentElement);
+    else if (!want && isFs) (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+  } catch (e) { /* needs a gesture; the click/keypress that toggled this counts */ }
+}
+document.addEventListener('fullscreenchange', () => {
+  const isFs = !!document.fullscreenElement;
+  if ((Settings.get('fullscreen') === 1) !== isFs) Settings.data.fullscreen = isFs ? 1 : 0, Settings.save();
 });
 Sound.setVolume(Settings.get('volume'));
 
@@ -142,6 +169,9 @@ const game = {
       player.hasBeam = true;
       player.beamCharge = 80;
       setTimeout(() => UI.msg('F — shoulder the beam. V — crank the spring.'), 1200);
+    } else if (id === 'foldedhour') {
+      flags.gotFolded = true;
+      setTimeout(() => UI.subtitle('Open your inventory and press the Folded Hour to your brow. It will not say where it takes you.', 6.5), 1200);
     } else if (Math.random() < 0.25) {
       setTimeout(() => UI.subtitle(pickLine('pickupFlavor'), 4.5), 900);
     }
@@ -205,14 +235,23 @@ function loadFloor(n) {
 
   const isEngine = !!FS.engine;
   const isForest = !!FS.outdoor;
-  let fogCol, far;
+  let fogCol, far, near = 2;
   if (isEngine) { fogCol = new THREE.Color(0x0a0507); far = 52; ambientBase = 0.34; }
-  else if (isForest) { fogCol = new THREE.Color(0x1c2022); far = 15; ambientBase = 0.62; }
+  else if (isForest) {
+    // Silent Hill: a luminous, near, pearl-grey fog the dark trees stand against
+    fogCol = new THREE.Color(0x9aa0a4); far = 26; near = 1; ambientBase = 0.92;
+  }
   else { fogCol = new THREE.Color(0x07070b); far = Math.max(15, 28 - n * 1.9); ambientBase = Math.max(0.18, 0.5 - n * 0.045); }
-  scene.fog = new THREE.Fog(fogCol, 2, far);
-  scene.background = fogCol;
+  fogFarBase = far;
+  scene.fog = new THREE.Fog(fogCol, near, far);
+  scene.background = fogCol.clone();
   ambient.intensity = ambientBase * (Settings.get('brightness') || 1);
-  ambient.color.setHex(isEngine ? 0x553636 : (isForest ? 0x46505a : 0x3c4250));
+  ambient.color.setHex(isEngine ? 0x553636 : (isForest ? 0x9098a0 : 0x3c4250));
+
+  // weather resets each floor; the pines may get rained on
+  rain.setTarget(0); rainLevel = 0; rainState = 'dry';
+  Sound.stopRain();
+  rainTimer = isForest ? 18 + Math.random() * 25 : -1;
 
   const b = FS.beacon;
   player.spawnAt(b.x + 1.4, b.z + 1.4, Math.PI * 0.75);
@@ -241,26 +280,101 @@ function beginRun(fromSave) {
     runSeed = sv.seed; floorNum = sv.floor; flags = sv.flags || {};
     inventory = sv.inv || [{ id: 'lantern', qty: 1 }];
     player.hp = sv.hp ?? 100; player.oil = sv.oil ?? 100;
-    player.swordEquipped = !!sv.sword;
-    player.swordVM.visible = player.swordEquipped;
     player.hasBeam = !!invFind('cranklamp');
     player.beamCharge = sv.charge ?? 80;
+    player.equipRight(null);   // start each session empty-handed in the right
   } else {
     runSeed = 'descent-' + Math.floor(Math.random() * 1e9).toString(36);
     floorNum = 1; flags = {};
     inventory = [{ id: 'lantern', qty: 1 }];
     player.hp = 100; player.oil = 100;
-    player.swordEquipped = false;
-    player.swordVM.visible = false;
     player.hasBeam = false;
     player.beamOn = false;
+    player.equipRight(null);
     saveGame();
   }
+  setRight(null);
   UI.showTitle(false);
   UI.showHud(true);
+  UI.canQuit = true;
+  inDim = null;
   UI.fade(true, true);
   lockPointer();
   setTimeout(() => loadFloor(floorNum), 400);
+}
+
+// ---------------------------------------------------------------- dimensions
+
+function enterDimension() {
+  if (inDim || !FS) return;
+  dimReturn = { floor: floorNum, x: player.pos.x, z: player.pos.z, yaw: player.yaw };
+  // fold the floor away
+  radarOn = false; UI.showRadar(false);
+  if (player.rightItem === 'radar') player.equipRight(null);
+  presence = null;
+  if (FS) { FS.dispose(); FS = null; }
+  dng = null;
+  Sound.stopRain(); rain.setTarget(0); rainLevel = 0; rainState = 'dry'; rainTimer = -1;
+  UI.prompt(null);
+
+  const dim = randomDimension();
+  inDim = dim;
+  dim.build(scene);
+  camera.far = dim.camFar || 90;
+  camera.updateProjectionMatrix();
+  player.sampleGround = (x, z) => dim.sampleGround(x, z);
+  player.voidBottom = -9999;
+  player.onVoid = dim.hasVoid ? () => exitDimension(true) : null;
+  player.spawnAt(dim.spawn.x, dim.spawn.z, dim.spawn.yaw, dim.spawn.groundY);
+  ambient.intensity = 0;     // dimensions bring their own light
+  Sound.startDimAmbience(dim.soundKind);
+  UI.titlecard('◇', dim.name);
+  UI.fade(true, true); setTimeout(() => UI.fade(false), 420);
+  setTimeout(() => { if (inDim === dim) UI.subtitle(dim.enterLine, 8); }, 1500);
+  mode = 'play';
+}
+
+function exitDimension(viaVoid) {
+  if (!inDim) return;
+  const dim = inDim; inDim = null;
+  dim.dispose(scene);
+  camera.far = 90;
+  camera.updateProjectionMatrix();
+  player.sampleGround = null;
+  player.onVoid = null;
+  player.voidBottom = -9999;
+  Sound.stopAmbience();
+  const ret = dimReturn || { floor: floorNum, x: 0, z: 0, yaw: 0 };
+  floorNum = ret.floor;
+  loadFloor(ret.floor);                       // rebuilds the same seeded floor
+  player.spawnAt(ret.x, ret.z, ret.yaw, 0);   // back exactly where you left
+  player.sampleGround = null;
+  if (viaVoid) {
+    Sound.thunk();
+    setTimeout(() => UI.subtitle('You fell. The fall lost interest in you, and set you back where you had been standing, as if nothing.', 7), 1600);
+  } else {
+    setTimeout(() => UI.subtitle('You crease the hour shut. The world you knew folds back around you.', 6), 1600);
+  }
+}
+
+function quitToMenu() {
+  UI.showSettings(false);
+  UI.showInventory(false);
+  UI.showPause(false);
+  UI.showRadar(false); radarOn = false;
+  if (inDim) { inDim.dispose(scene); inDim = null; camera.far = 90; camera.updateProjectionMatrix(); }
+  player.sampleGround = null; player.onVoid = null;
+  if (FS) { FS.dispose(); FS = null; }
+  presence = null; dng = null;
+  Sound.stopAmbience(); Sound.stopRain();
+  rain.setTarget(0); rainLevel = 0; rainState = 'dry';
+  document.exitPointerLock?.();
+  UI.showHud(false);
+  UI.canQuit = false;
+  if (loadSave()) btnContinue.classList.remove('hidden');
+  UI.showTitle(true);
+  UI.fade(false);
+  mode = 'title';
 }
 
 // ---------------------------------------------------------------- pointer lock
@@ -303,11 +417,11 @@ canvas.addEventListener('mousedown', () => {
     if (!isLocked()) {
       if (noPointerLock) dragLook = true;
       else lockPointer();
-    } else if (player.swordEquipped && player.swing <= 0) {
+    } else if (player.rightItem === 'sword' && player.swing <= 0) {
       player.swing = 1;
       const f = player.forward();
       const tx = player.pos.x + f.x * 1.2, tz = player.pos.z + f.z * 1.2;
-      if (dng && dng.isSolid(Math.floor(tx / CELL), Math.floor(tz / CELL))) {
+      if (!inDim && dng && dng.isSolid(Math.floor(tx / CELL), Math.floor(tz / CELL))) {
         setTimeout(() => {
           Sound.clangAt(tx, tz, 0.2);
           if (Math.random() < 0.25) UI.subtitle(pickLine('swordWall'), 4);
@@ -329,10 +443,13 @@ if (loadSave()) btnContinue.classList.remove('hidden');
 btnBegin.addEventListener('click', () => beginRun(false));
 btnContinue.addEventListener('click', () => beginRun(true));
 btnSettings.addEventListener('click', () => openSettings('title'));
+UI.onQuit = quitToMenu;
 
 function openSettings(from) {
   settingsReturn = from;
   mode = 'settings';
+  UI.canQuit = (from !== 'title');
+  UI.settingsSel = 0;
   UI.showPause(false);
   UI.showSettings(true);
 }
@@ -352,7 +469,7 @@ let candidate = null;
 
 function scanInteractables() {
   candidate = null;
-  if (!FS) return;
+  if (!FS || inDim) { UI.prompt(null); return; }
   let best = 1e9;
   for (const it of FS.interactables) {
     const dx = it.x - player.pos.x, dz = it.z - player.pos.z;
@@ -397,15 +514,14 @@ let radarEntityHeard = false;
 
 function toggleRadar() {
   if (!invFind('radar')) return;
-  radarOn = !radarOn;
-  UI.showRadar(radarOn);
-  if (radarOn) {
-    Sound.radarPing();
-    if (!flags.radarUsed) {
-      flags.radarUsed = true;
-      UI.subtitle(pickLine('radar'), 5);
-      saveGame();
-    }
+  if (inDim) { UI.msg('The drum hears nothing here. There are no walls to hear.'); return; }
+  if (player.rightItem === 'radar') { setRight(null); return; }
+  setRight('radar');
+  Sound.radarPing();
+  if (!flags.radarUsed) {
+    flags.radarUsed = true;
+    UI.subtitle(pickLine('radar'), 5);
+    saveGame();
   }
 }
 
@@ -418,7 +534,7 @@ function angDiff(a, b) {
 }
 
 function updateRadar(dt, t) {
-  if (!radarOn || !FS) return;
+  if (!radarOn || !FS || inDim || player.rightItem !== 'radar') return;
   const RANGE = 20;
   const px = player.pos.x, pz = player.pos.z;
   const prevA = sweepA;
@@ -575,29 +691,41 @@ function updateShadowStare(dt) {
 
 // ---------------------------------------------------------------- item use
 
+// the right hand holds exactly one item; syncing the radar HUD here
+function setRight(item) {
+  player.equipRight(item);
+  radarOn = (item === 'radar');
+  UI.showRadar(radarOn);
+}
+
 function useSelectedItem() {
   const slot = inventory[invSel];
   if (!slot) return;
   const def = itemDef(slot.id);
   if (slot.id === 'oil') {
-    if (player.oil > 92) { UI.msg('The lantern is full. It burns a little proudly.'); return; }
+    if (player.oil > 92) { closeInventory(); UI.msg('The lantern is full. It burns a little proudly.'); return; }
     player.oil = Math.min(100, player.oil + 55);
     invRemove('oil'); Sound.useItem();
+    closeInventory();
     UI.msg(pickLine('useOil'), 5);
+    return;
   } else if (slot.id === 'ampoule') {
-    if (player.hp > player.maxHp - 5) { UI.msg('Your body holds no room for more light.'); return; }
+    if (player.hp > player.maxHp - 1) { closeInventory(); UI.msg('Your body holds no room for more light.'); return; }
     player.hp = Math.min(player.maxHp, player.hp + 60);
     invRemove('ampoule'); Sound.useItem();
+    closeInventory();
     UI.msg(pickLine('useAmpoule'), 5);
+    return;
   } else if (slot.id === 'psalm') {
     invRemove('psalm'); Sound.psalm();
     if (presence) presence.calm();
+    closeInventory();
     UI.subtitle(pickLine('usePsalm'), 6);
+    return;
   } else if (slot.id === 'sword') {
-    player.swordEquipped = !player.swordEquipped;
-    player.swordVM.visible = player.swordEquipped;
+    setRight(player.rightItem === 'sword' ? null : 'sword');
     Sound.swordEquip();
-    UI.msg(player.swordEquipped ? 'The weight is absurd. The comfort is not.' : 'You sheathe the nameless blade.');
+    UI.msg(player.rightItem === 'sword' ? 'The weight is absurd. The comfort is not.' : 'You sheathe the nameless blade.');
   } else if (slot.id === 'cranklamp') {
     closeInventory();
     toggleBeam();
@@ -605,6 +733,11 @@ function useSelectedItem() {
   } else if (slot.id === 'radar') {
     closeInventory();
     toggleRadar();
+    return;
+  } else if (slot.id === 'foldedhour') {
+    closeInventory();
+    if (inDim) exitDimension();
+    else enterDimension();
     return;
   } else if (def.type === 'note') {
     closeInventory();
@@ -621,12 +754,13 @@ function useSelectedItem() {
 
 function toggleBeam() {
   if (!player.hasBeam) return;
-  if (!player.beamOn && player.beamCharge <= 1) {
+  if (player.rightItem === 'crank') { setRight(null); Sound.useItem(); return; }
+  if (player.beamCharge <= 1) {
     Sound.thunk();
     UI.msg('The spring is slack. Crank it. (V)');
     return;
   }
-  player.beamOn = !player.beamOn;
+  setRight('crank');
   Sound.useItem();
 }
 
@@ -689,14 +823,17 @@ window.addEventListener('keydown', (e) => {
     else if (e.code === 'KeyE' || e.code === 'Enter') { useSelectedItem(); return; }
     if (mode === 'inventory') UI.renderInventory(inventory, invSel, player.swordEquipped, player.beamOn);
   } else if (mode === 'settings') {
+    const maxSel = SETTING_DEFS.length - 1 + (UI.canQuit ? 1 : 0);
+    const onQuitRow = UI.settingsSel === SETTING_DEFS.length;
     if (e.code === 'Escape' || e.code === 'KeyO' || e.code === 'Tab') closeSettings();
-    else if (e.code === 'ArrowDown' || e.code === 'KeyS') { UI.settingsSel = Math.min(SETTING_DEFS.length - 1, UI.settingsSel + 1); UI.renderSettings(); }
+    else if (e.code === 'ArrowDown' || e.code === 'KeyS') { UI.settingsSel = Math.min(maxSel, UI.settingsSel + 1); UI.renderSettings(); }
     else if (e.code === 'ArrowUp' || e.code === 'KeyW') { UI.settingsSel = Math.max(0, UI.settingsSel - 1); UI.renderSettings(); }
     else if (e.code === 'ArrowRight' || e.code === 'KeyD' || e.code === 'Enter' || e.code === 'KeyE') {
+      if (onQuitRow) { quitToMenu(); return; }
       Settings.cycle(SETTING_DEFS[UI.settingsSel].id, 1); UI.renderSettings();
     }
     else if (e.code === 'ArrowLeft' || e.code === 'KeyA') {
-      Settings.cycle(SETTING_DEFS[UI.settingsSel].id, -1); UI.renderSettings();
+      if (!onQuitRow) { Settings.cycle(SETTING_DEFS[UI.settingsSel].id, -1); UI.renderSettings(); }
     }
   } else if (mode === 'pause') {
     if (e.code === 'KeyO') openSettings('pause');
@@ -761,6 +898,33 @@ function updateEnding(dt) {
   }
 }
 
+// ---------------------------------------------------------------- weather
+
+function updateWeather(dt) {
+  const active = FS && FS.outdoor && !inDim;
+  if (active) {
+    rainTimer -= dt;
+    if (rainState === 'dry' && rainTimer <= 0) {
+      rainState = 'wet';
+      rain.setTarget(0.65 + Math.random() * 0.35);
+      Sound.startRain();
+      rainTimer = 30 + Math.random() * 36;
+      UI.subtitle('Rain finds even this far down. The fog drinks it and thickens.', 6);
+    } else if (rainState === 'wet' && rainTimer <= 0) {
+      rainState = 'drying';
+      rain.setTarget(0);
+    } else if (rainState === 'drying' && rain.intensity < 0.04) {
+      rainState = 'dry';
+      Sound.stopRain();
+      rainTimer = 45 + Math.random() * 55;
+    }
+  }
+  rain.update(dt, player.pos);
+  rainLevel = rain.intensity;
+  Sound.setRainLevel(rainLevel);
+  if (active && scene.fog) scene.fog.far = fogFarBase * (1 - 0.5 * rainLevel);
+}
+
 // ---------------------------------------------------------------- main loop
 
 let lastT = performance.now();
@@ -781,14 +945,20 @@ function frame() {
 
   if (mode === 'play' || mode === 'inventory' || mode === 'descend' || mode === 'end' || mode === 'dead') {
     const inputEnabled = mode === 'play' && !UI.dialogOpen;
-    player.update(dt, dng, FS ? FS.colliders : [], inputEnabled);
+    if (inDim) {
+      inDim.update(dt, player);
+      player.update(dt, null, inDim.colliders, inputEnabled);
+    } else {
+      player.update(dt, dng, FS ? FS.colliders : [], inputEnabled);
+    }
     Sound.updateListener(player.pos, player.yaw);
     if (radarOn) player.noise = Math.max(player.noise, 0.4);
 
     if (mode === 'play') {
       player.oil = Math.max(0, player.oil - dt * (100 / 520));
+      updateWeather(dt);
 
-      if (presence && !UI.dialogOpen) {
+      if (presence && !UI.dialogOpen && !inDim) {
         presence.update(dt, t);
         if (FS.engine) {
           const d = Math.hypot(player.pos.x - FS.engine.x, player.pos.z - FS.engine.z);
@@ -803,7 +973,7 @@ function frame() {
           if (d < 6.5 && endT < 0) { mode = 'end'; endT = 0; }
         }
       }
-      for (const npc of (FS ? FS.npcs : [])) npc.update(dt, t, player, game);
+      if (!inDim) for (const npc of (FS ? FS.npcs : [])) npc.update(dt, t, player, game);
 
       scanInteractables();
       updateRadar(dt, t);
@@ -814,7 +984,7 @@ function frame() {
       UI.caughtOverlay(caught ? 0.92 : Math.max(0, (dread - 0.82) * 2.5));
       Sound.tick(dt, { dread, caught });
 
-      if (player.hp <= 0) die();
+      if (!inDim && FS && player.hp <= 0) die();
     } else if (mode === 'end') {
       updateEnding(dt);
       Sound.tick(dt, { dread: 0.3, caught: false });
@@ -828,16 +998,17 @@ function frame() {
 }
 
 player.onStep = (running, crouched) => {
-  if (FS && mode === 'play') {
-    const kind = FS.matAt(player.pos.x, player.pos.z);
-    Sound.step(kind, crouched ? 0.06 : (running ? 0.24 : 0.15));
-  }
+  if (mode !== 'play') return;
+  const kind = inDim ? (inDim.id === 'flood' ? 'soil' : (inDim.id === 'stair' ? 'metal' : 'soil'))
+                     : (FS ? FS.matAt(player.pos.x, player.pos.z) : 'stone');
+  Sound.step(kind, crouched ? 0.06 : (running ? 0.24 : 0.15));
 };
 player.onJump = () => {};
 player.onLand = (hard) => {
-  if (FS && mode === 'play') {
-    Sound.land(FS.matAt(player.pos.x, player.pos.z), hard);
-  }
+  if (mode !== 'play') return;
+  const kind = inDim ? (inDim.id === 'stair' ? 'metal' : 'soil')
+                     : (FS ? FS.matAt(player.pos.x, player.pos.z) : 'stone');
+  Sound.land(kind, hard);
 };
 
 // console debug handle
@@ -847,7 +1018,11 @@ window.__lanthorn = {
   get dng() { return dng; },
   get presence() { return presence; },
   get mode() { return mode; },
+  get inDim() { return inDim; },
+  get rain() { return rain; },
   game, loadFloor,
+  enterDim: () => enterDimension(),
+  exitDim: () => exitDimension(false),
   lineCount,
   Settings,
 };

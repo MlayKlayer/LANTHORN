@@ -661,9 +661,39 @@ export function engineHeart() {
   return { group: g, r: 4.8, lights: [] };
 }
 
+// ---------------------------------------------------------------- hands
+
+// a blocky gloved hand, wrist at origin, fingers reaching toward -z.
+// `side` flips the thumb; `curl` 0 (open) .. 1 (fist).
+export function gloveHand(side = 'right', curl = 1) {
+  const g = new THREE.Group();
+  const glove = flat(0x5b4e3f);
+  const knuck = flat(0x6a5c49);
+  const cuff = flat(0x3a332a);
+  const s = side === 'left' ? -1 : 1;
+  const cuffM = box(0.085, 0.075, 0.11, cuff); cuffM.position.set(0, 0, 0.075); g.add(cuffM);
+  const palm = box(0.092, 0.05, 0.11, glove); palm.position.set(0, 0, -0.02); g.add(palm);
+  for (let i = 0; i < 4; i++) {
+    const knuckle = box(0.02, 0.028, 0.04, knuck);
+    knuckle.position.set(-0.034 + i * 0.023, 0.004, -0.085);
+    g.add(knuckle);
+    const f = box(0.018, 0.026, 0.05, glove);
+    const cz = -0.1 - Math.cos(curl) * 0.0;
+    f.position.set(-0.034 + i * 0.023, -0.018 - curl * 0.018, -0.092);
+    f.rotation.x = curl * 1.15;
+    g.add(f);
+  }
+  const thumb = box(0.024, 0.026, 0.052, knuck);
+  thumb.position.set(s * 0.052, -0.004, -0.05);
+  thumb.rotation.z = -s * 0.7;
+  thumb.rotation.x = curl * 0.45;
+  g.add(thumb);
+  return g;
+}
+
 // ---------------------------------------------------------------- viewmodels
 
-export function lanternViewmodel() {
+function lanternModel() {
   const g = new THREE.Group();
   const iron = flat(0x2c2a26);
   const cage = cyl(0.045, 0.06, 0.13, 7, iron); g.add(cage);
@@ -681,30 +711,93 @@ export function lanternViewmodel() {
   return g;
 }
 
+// LEFT hand: fist closed over the lantern's bail, lantern swinging beneath.
+export function lanternViewmodel() {
+  const g = new THREE.Group();
+  const hand = gloveHand('left', 1);
+  hand.rotation.set(-1.5, 0, 0); // knuckles up, fingers hooking down over the ring
+  hand.position.set(0, 0.12, 0.02);
+  g.add(hand);
+  const lantern = lanternModel();
+  lantern.position.set(0, 0.0, 0);
+  g.add(lantern);
+  g.userData.core = lantern.userData.core;
+  return g;
+}
+
+// RIGHT hand: fist around the grip, blade swept up and across.
+export function swordViewmodel() {
+  const g = new THREE.Group();
+  const sword = swordMesh(0.5);
+  sword.position.set(0, -0.06, 0.02);
+  g.add(sword);
+  const hand = gloveHand('right', 1);
+  hand.rotation.set(-1.15, 0.2, 0);
+  hand.position.set(0, 0.04, 0.0);
+  g.add(hand);
+  g.rotation.set(-0.22, 0.3, -0.5);
+  return g;
+}
+
+// RIGHT hand: gripping the crank-lantern body, beam out the front.
 export function crankViewmodel() {
   const g = new THREE.Group();
-  const body = box(0.07, 0.1, 0.13, matFor('rust'));
-  g.add(body);
-  const lens = cyl(0.035, 0.045, 0.03, 9, flat(0xffe2b0, { emissive: 0xffd9a0, emissiveIntensity: 0.9 }));
+  const dev = new THREE.Group();
+  const body = box(0.08, 0.11, 0.14, matFor('rust'));
+  dev.add(body);
+  const lens = cyl(0.04, 0.05, 0.035, 10, flat(0xffe2b0, { emissive: 0xffd9a0, emissiveIntensity: 0.9 }));
   lens.rotation.x = Math.PI / 2;
-  lens.position.set(0, 0.01, -0.075);
-  g.add(lens);
+  lens.position.set(0, 0.012, -0.085);
+  dev.add(lens);
+  const hood = cyl(0.055, 0.05, 0.03, 10, flat(0x2a251f));
+  hood.rotation.x = Math.PI / 2; hood.position.set(0, 0.012, -0.07);
+  dev.add(hood);
   const crank = new THREE.Group();
-  const arm = box(0.015, 0.05, 0.015, flat(0x46403a));
-  arm.position.y = -0.025; crank.add(arm);
-  const knob = box(0.022, 0.022, 0.022, flat(0x2a251f));
-  knob.position.y = -0.055; crank.add(knob);
-  crank.position.set(0.05, 0, 0.02);
-  crank.rotation.z = Math.PI / 2;
-  g.add(crank);
+  const arm = box(0.016, 0.055, 0.016, flat(0x46403a)); arm.position.y = -0.028; crank.add(arm);
+  const knob = box(0.024, 0.024, 0.024, flat(0x2a251f)); knob.position.y = -0.06; crank.add(knob);
+  crank.position.set(0.06, 0, 0.03); crank.rotation.z = Math.PI / 2;
+  dev.add(crank);
+  g.add(dev);
+  const hand = gloveHand('right', 1);
+  hand.rotation.set(-0.2, 0, 0);
+  hand.position.set(0.0, -0.085, 0.05);
+  g.add(hand);
   g.userData.crank = crank;
   g.userData.lens = lens;
   return g;
 }
 
-export function swordViewmodel() {
-  const g = swordMesh(0.5);
-  g.rotation.set(-0.22, 0.3, -0.38);
+// RIGHT hand: holding the verger's wave-drum, the dish spinning when awake.
+export function radarViewmodel() {
+  const g = new THREE.Group();
+  const dev = new THREE.Group();
+  const brass = matFor('rust', { color: 0xb89a5c });
+  const drum = cyl(0.06, 0.065, 0.1, 12, brass);
+  drum.rotation.z = Math.PI / 2; drum.position.set(0, 0.02, -0.04);
+  dev.add(drum);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.062, 0.01, 4, 12), flat(0x3a3026));
+  rim.position.set(0.05, 0.02, -0.04); rim.rotation.y = Math.PI / 2;
+  dev.add(rim);
+  const spinner = new THREE.Group();
+  const fin = box(0.012, 0.012, 0.11, flat(0xd8c890, { emissive: 0x6a5a30, emissiveIntensity: 0.6 }));
+  fin.position.set(0, 0, 0); spinner.add(fin);
+  spinner.position.set(0, 0.085, -0.04);
+  dev.add(spinner);
+  g.add(dev);
+  const hand = gloveHand('right', 1);
+  hand.rotation.set(-0.35, 0, 0);
+  hand.position.set(0.0, -0.06, 0.05);
+  g.add(hand);
+  g.userData.spinner = spinner;
+  return g;
+}
+
+// RIGHT hand: empty, hanging relaxed.
+export function emptyHandViewmodel() {
+  const g = new THREE.Group();
+  const hand = gloveHand('right', 0.5);
+  hand.rotation.set(-0.5, 0, 0);
+  g.add(hand);
   return g;
 }
 

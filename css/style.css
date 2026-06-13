@@ -512,6 +512,10 @@ body.vhs-jitter #vhs-stamp { transform: translateX(1px); }
   letter-spacing: 0.1em;
   color: #6c665a;
 }
+.set-row.set-quit { margin-top: 14px; }
+.set-row.set-quit .set-label { color: #9e4034; letter-spacing: 0.3em; }
+.set-row.set-quit.sel { border-color: #6e2a22; background: rgba(40,16,12,0.5); }
+.set-row.set-quit.sel .set-label { color: #c8503e; }
 #settings-hint {
   font-size: 13px;
   letter-spacing: 0.18em;

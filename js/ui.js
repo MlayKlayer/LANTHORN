@@ -218,6 +218,14 @@ export const UI = {
       });
       list.appendChild(row);
     });
+    // quit-to-menu action, shown only mid-run
+    if (this.canQuit) {
+      const q = document.createElement('div');
+      q.className = 'set-row set-quit' + (this.settingsSel === SETTING_DEFS.length ? ' sel' : '');
+      q.innerHTML = '<div class="set-label">QUIT TO MENU</div><div class="set-value">↵</div>';
+      q.addEventListener('click', () => { if (this.onQuit) this.onQuit(); });
+      list.appendChild(q);
+    }
   },
 
   // ------------------------------------------------------------ filters

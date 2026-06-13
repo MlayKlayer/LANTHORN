@@ -43,6 +43,11 @@ export const ITEMS = {
     desc: 'A hand-cranked lamp that throws a long warm beam, restless as held firelight. The spring runs down; the handle winds it back. The winch-wrights swore by it, and at it. (F to shine, V to crank.)',
     useLabel: 'shoulder it (F)',
   },
+  foldedhour: {
+    id: 'foldedhour', name: 'The Folded Hour', icon: 'relic', type: 'tool',
+    desc: 'A scrap of time, creased many times over, soft as cloth. Pressed to the brow it opens a pocket of elsewhere — which elsewhere, it will not say. Press it again, once you are within, to crease your way home. The way out is the way in.',
+    useLabel: 'press it to your brow',
+  },
 };
 
 // Memory-relics: tradable to the Archive.
