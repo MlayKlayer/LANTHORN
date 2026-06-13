@@ -1,16 +1,21 @@
-// First-person controller, revision 2: crouch, jump, gravity, a noise model
-// the dark can hear, a hand-cranked beam lantern, and a shadow that is
-// — look down sometime — a perfect circle.
+// First-person controller, revision 3: crouch, jump, gravity over arbitrary
+// ground (for pocket dimensions), a noise model the dark can hear, gloved
+// hands — lamp in the LEFT, one item at a time in the RIGHT — and a shadow
+// that is, look down sometime, a perfect circle.
 
 import * as THREE from 'three';
 import { CELL } from './dungeon.js';
-import { lanternViewmodel, swordViewmodel, crankViewmodel, shadowBlobMesh } from './props.js';
+import {
+  lanternViewmodel, swordViewmodel, crankViewmodel, radarViewmodel,
+  emptyHandViewmodel, shadowBlobMesh,
+} from './props.js';
 import { Settings } from './settings.js';
 
 const EYE = 1.62, EYE_CROUCH = 0.96;
 const RADIUS = 0.38;
 const WALK = 3.1, RUN = 5.2, CROUCH_SPD = 1.7;
 const GRAV = -13.5, JUMP_V = 4.6;
+const STEP = 1.6;   // how far feet snap to follow ground (stairs)
 
 export class Player {
   constructor(camera, scene) {
@@ -20,14 +25,19 @@ export class Player {
     this.hp = 100; this.maxHp = 100;
     this.stamina = 100;
     this.oil = 100;
-    this.swordEquipped = false;
 
     // posture & air
     this.crouched = false;
     this.crouchFrac = 0;
-    this.y = 0; this.vy = 0;
+    this.feetY = 0; this.vy = 0;
     this.grounded = true;
     this.airTime = 0;
+    this.airOffset = 0;        // feet height above the ground beneath (for bob/shadow)
+
+    // pluggable ground for pocket dimensions: (x,z) -> world Y, or null = void
+    this.sampleGround = null;
+    this.voidBottom = -9999;
+    this.onVoid = null;
 
     // how loud you are being, 0..1 — the dark keeps its own copy
     this.noise = 0;
@@ -44,37 +54,43 @@ export class Player {
     this.running = false;
     this.lanternDimmer = 1;
 
-    // ember lantern (point light + viewmodel)
+    // ember lantern light — your base light, lives in the LEFT hand
     this.lanternLight = new THREE.PointLight(0xffb868, 13, 13, 1.6);
     camera.add(this.lanternLight);
-    this.lanternLight.position.set(0.25, -0.18, -0.3);
+    this.lanternLight.position.set(-0.22, -0.16, -0.3);
 
-    this.lanternVM = lanternViewmodel();
-    this.lanternVM.position.set(0.31, -0.34, -0.62);
-    camera.add(this.lanternVM);
+    this.lampVM = lanternViewmodel();
+    this.lampBase = new THREE.Vector3(-0.32, -0.34, -0.6);
+    this.lampVM.position.copy(this.lampBase);
+    camera.add(this.lampVM);
+
+    // RIGHT hand holds exactly one item at a time
+    this.rightItem = null;     // null | 'sword' | 'crank' | 'radar'
+    this.rightBase = new THREE.Vector3(0.34, -0.4, -0.62);
 
     this.swordVM = swordViewmodel();
-    this.swordVM.position.set(-0.46, -0.5, -0.72);
-    this.swordVM.visible = false;
-    camera.add(this.swordVM);
+    this.crankVM = crankViewmodel();
+    this.radarVM = radarViewmodel();
+    this.emptyVM = emptyHandViewmodel();
+    for (const vm of [this.swordVM, this.crankVM, this.radarVM, this.emptyVM]) {
+      vm.position.copy(this.rightBase);
+      vm.visible = false;
+      camera.add(vm);
+    }
+    this.emptyVM.visible = true;
 
-    // crank-lantern: a warm beam with a live flame's nerves
+    // crank-lantern beam (only lit while the crank-lamp is the held right item)
     this.hasBeam = false;
     this.beamOn = false;
     this.beamCharge = 100;
     this.crankSpin = 0;
     this.beam = new THREE.SpotLight(0xffc88a, 0, 26, 0.45, 0.55, 1.4);
-    this.beam.position.set(-0.2, -0.15, 0);
+    this.beam.position.set(0.2, -0.12, 0);
     camera.add(this.beam);
     this.beamTarget = new THREE.Object3D();
     this.beamTarget.position.set(0, -0.6, -12);
     camera.add(this.beamTarget);
     this.beam.target = this.beamTarget;
-
-    this.crankVM = crankViewmodel();
-    this.crankVM.position.set(-0.3, -0.3, -0.55);
-    this.crankVM.visible = false;
-    camera.add(this.crankVM);
 
     // the shadow. it is round. you have not noticed yet.
     this.shadow = shadowBlobMesh();
@@ -82,6 +98,20 @@ export class Player {
 
     window.addEventListener('keydown', (e) => { this.keys[e.code] = true; });
     window.addEventListener('keyup', (e) => { this.keys[e.code] = false; });
+  }
+
+  get swordEquipped() { return this.rightItem === 'sword'; }
+
+  // one item per right hand; equipping one puts the others away
+  equipRight(item) {
+    this.rightItem = item;
+    this.swordVM.visible = item === 'sword';
+    this.crankVM.visible = item === 'crank';
+    this.radarVM.visible = item === 'radar';
+    this.emptyVM.visible = !item;
+    if (item !== 'crank') this.beamOn = false;
+    else this.beamOn = this.beamCharge > 1;
+    return this.rightItem;
   }
 
   forward() {
@@ -95,15 +125,13 @@ export class Player {
     this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch));
   }
 
-  spawnAt(x, z, yaw = 0) {
+  spawnAt(x, z, yaw = 0, groundY = 0) {
     this.pos.set(x, 0, z);
     this.yaw = yaw; this.pitch = 0;
-    this.y = 0; this.vy = 0; this.grounded = true;
+    this.feetY = groundY; this.vy = 0; this.grounded = true; this.airOffset = 0;
   }
 
-  toggleCrouch() {
-    this.crouched = !this.crouched;
-  }
+  toggleCrouch() { this.crouched = !this.crouched; }
 
   jump() {
     if (this.crouched) { this.crouched = false; return false; }
@@ -120,11 +148,11 @@ export class Player {
     const before = this.beamCharge;
     this.beamCharge = Math.min(100, this.beamCharge + 1.7);
     this.crankSpin = 1;
+    if (this.rightItem === 'crank' && !this.beamOn && this.beamCharge > 1) this.beamOn = true;
     return this.beamCharge - before;
   }
 
   update(dt, dng, colliders, inputEnabled) {
-    // arrow-key look fallback
     if (inputEnabled) {
       const lookSpd = 2.1 * (Settings.get('look') || 1) * dt;
       if (this.keys['ArrowLeft']) this.yaw += lookSpd;
@@ -159,22 +187,36 @@ export class Player {
       this.pos.z += dir.z * speed * dt;
     }
 
-    this.collide(dng, colliders);
+    if (dng) this.collide(dng, colliders);
+    else this.collideProps(colliders);
 
-    // vertical: gravity and the floor's patient custody
-    if (!this.grounded || this.vy !== 0 || this.y > 0) {
-      const prevVy = this.vy;
+    // ---- vertical: gravity over arbitrary ground (flat 0, or a dimension)
+    const ground = this.sampleGround ? this.sampleGround(this.pos.x, this.pos.z) : 0;
+    if (ground === null || ground === undefined) {
+      // void — fall, then evaporate
       this.vy += GRAV * dt;
-      this.y += this.vy * dt;
+      this.feetY += this.vy * dt;
+      this.grounded = false;
       this.airTime += dt;
-      if (this.y <= 0) {
-        this.y = 0; this.vy = 0;
-        if (!this.grounded && this.onLand) this.onLand(prevVy < -6, this.airTime);
-        this.grounded = true;
-        this.airTime = 0;
-      } else {
-        this.grounded = false;
+      this.airOffset = 4;
+      if (this.feetY < this.voidBottom && this.onVoid) { this.onVoid(); }
+    } else {
+      if (this.grounded && this.vy <= 0) {
+        if (Math.abs(this.feetY - ground) < STEP) { this.feetY = ground; this.vy = 0; }
+        else this.grounded = false;
       }
+      if (!this.grounded) {
+        const prevVy = this.vy;
+        this.vy += GRAV * dt;
+        this.feetY += this.vy * dt;
+        this.airTime += dt;
+        if (this.feetY <= ground && prevVy <= 0) {
+          this.feetY = ground; this.vy = 0;
+          if (this.onLand) this.onLand(prevVy < -6, this.airTime);
+          this.grounded = true; this.airTime = 0;
+        }
+      }
+      this.airOffset = Math.max(0, this.feetY - ground);
     }
 
     // crouch transition
@@ -207,7 +249,7 @@ export class Player {
     if (this.swing > 0) this.swing = Math.max(0, this.swing - dt * 2.4);
 
     // compose camera
-    const eyeH = EYE + (EYE_CROUCH - EYE) * this.crouchFrac + this.y;
+    const eyeH = this.feetY + EYE + (EYE_CROUCH - EYE) * this.crouchFrac;
     const bobY = Math.sin(this.bobPhase * 2) * 0.045 * this.bobAmp * bobScale;
     const bobX = Math.cos(this.bobPhase) * 0.025 * this.bobAmp * bobScale;
     this.camera.position.set(
@@ -222,58 +264,76 @@ export class Player {
     // viewmodel sway
     const sway = Math.sin(this.bobPhase) * 0.012 * this.bobAmp;
     const swayY = Math.abs(Math.cos(this.bobPhase)) * 0.012 * this.bobAmp;
-    this.lanternVM.position.set(0.31 + sway, -0.34 - swayY, -0.62);
-    this.lanternVM.rotation.z = sway * 2.4;
-    if (this.swordVM.visible) {
+
+    // LEFT hand — lamp, always present
+    this.lampVM.position.set(this.lampBase.x + sway, this.lampBase.y - swayY, this.lampBase.z);
+    this.lampVM.rotation.z = 0.1 + sway * 2.4;
+
+    // RIGHT hand — whichever item, with item-specific bob
+    const rb = this.rightBase;
+    this.emptyVM.position.set(rb.x - sway, rb.y - swayY, rb.z);
+    if (this.rightItem === 'sword') {
       const sw = Math.sin(this.swing * Math.PI);
-      this.swordVM.position.set(-0.46 - sway, -0.5 - swayY + sw * 0.16, -0.72);
-      this.swordVM.rotation.set(-0.22 + sw * -0.8, 0.3, -0.38 + sw * 0.45);
+      this.swordVM.position.set(rb.x - sway, rb.y - swayY + sw * 0.16, rb.z + sw * 0.05);
+      this.swordVM.rotation.set(-0.22 + sw * -0.8, 0.3, -0.5 + sw * 0.45);
+    } else if (this.rightItem === 'radar') {
+      this.radarVM.position.set(rb.x - sway, rb.y - swayY, rb.z);
+      if (this.radarVM.userData.spinner) this.radarVM.userData.spinner.rotation.y += dt * 6.5;
+    } else if (this.rightItem === 'crank') {
+      this.crankVM.position.set(rb.x - sway, rb.y - swayY, rb.z);
     }
 
     // ember lantern flicker tied to oil
     const oilFrac = Math.max(0.16, this.oil / 100);
     const flick = 0.92 + 0.08 * Math.sin(performance.now() * 0.013) * Math.sin(performance.now() * 0.007);
     this.lanternLight.intensity = 13 * oilFrac * flick * (this.lanternDimmer ?? 1);
-    if (this.lanternVM.userData.core) {
-      this.lanternVM.userData.core.material.opacity = 0.5 + 0.45 * oilFrac;
+    if (this.lampVM.userData.core) {
+      this.lampVM.userData.core.material.opacity = 0.5 + 0.45 * oilFrac;
     }
 
-    // crank beam: fire on a leash — jittering aim, breathing brightness
-    this.crankVM.visible = this.hasBeam;
-    if (this.hasBeam) {
-      if (this.beamOn && this.beamCharge > 0) {
-        this.beamCharge = Math.max(0, this.beamCharge - dt * (100 / 340));
-        const tNow = performance.now() / 1000;
-        const low = this.beamCharge < 18;
-        const fire =
-          0.78
-          + 0.13 * Math.sin(tNow * 9.1)
-          + 0.07 * Math.sin(tNow * 23.7 + 1.7)
-          + 0.06 * Math.sin(tNow * 5.3 + 4.1);
-        const gutter = low ? (0.4 + 0.6 * Math.abs(Math.sin(tNow * 13))) : 1;
-        this.beam.intensity += ((44 * fire * gutter) - this.beam.intensity) * Math.min(1, dt * 14);
-        // the beam wanders like held firelight
-        this.beamTarget.position.x = Math.sin(tNow * 6.7) * 0.32 + Math.sin(tNow * 2.3) * 0.2 + sway * 6;
-        this.beamTarget.position.y = -0.6 + Math.sin(tNow * 7.9 + 2) * 0.26 + swayY * 5;
-        if (this.beamCharge <= 0) this.beamOn = false;
-      } else {
-        this.beam.intensity += (0 - this.beam.intensity) * Math.min(1, dt * 8);
-      }
+    // crank beam — fire on a leash: jittering aim, breathing brightness
+    if (this.rightItem === 'crank' && this.beamOn && this.beamCharge > 0) {
+      this.beamCharge = Math.max(0, this.beamCharge - dt * (100 / 340));
+      const tNow = performance.now() / 1000;
+      const low = this.beamCharge < 18;
+      const fire = 0.78 + 0.13 * Math.sin(tNow * 9.1) + 0.07 * Math.sin(tNow * 23.7 + 1.7) + 0.06 * Math.sin(tNow * 5.3 + 4.1);
+      const gutter = low ? (0.4 + 0.6 * Math.abs(Math.sin(tNow * 13))) : 1;
+      this.beam.intensity += ((44 * fire * gutter) - this.beam.intensity) * Math.min(1, dt * 14);
+      this.beamTarget.position.x = Math.sin(tNow * 6.7) * 0.32 + Math.sin(tNow * 2.3) * 0.2 + sway * 6;
+      this.beamTarget.position.y = -0.6 + Math.sin(tNow * 7.9 + 2) * 0.26 + swayY * 5;
+      if (this.beamCharge <= 0) this.beamOn = false;
+    } else {
+      this.beam.intensity += (0 - this.beam.intensity) * Math.min(1, dt * 8);
+    }
+    if (this.rightItem === 'crank') {
       const lens = this.crankVM.userData.lens;
       if (lens) lens.material.emissiveIntensity = this.beamOn ? 0.9 : 0.12;
       if (this.crankSpin > 0) {
         this.crankSpin = Math.max(0, this.crankSpin - dt * 2.2);
         this.crankVM.userData.crank.rotation.x += dt * 22;
       }
-      const crankSway = this.crankVM;
-      crankSway.position.set(-0.3 - sway, -0.3 - swayY, -0.55);
     }
 
     // the shadow: dynamic, attentive, and perfectly, perfectly round
-    this.shadow.position.set(this.pos.x, 0.035, this.pos.z);
-    const breathe = 1 + Math.sin(this.bobPhase * 2) * 0.03 * this.bobAmp + (this.y > 0 ? this.y * 0.12 : 0);
+    const shGround = (ground === null || ground === undefined) ? this.feetY : ground;
+    this.shadow.position.set(this.pos.x, shGround + 0.04, this.pos.z);
+    const breathe = 1 + Math.sin(this.bobPhase * 2) * 0.03 * this.bobAmp + this.airOffset * 0.12;
     this.shadow.scale.setScalar(breathe);
-    this.shadow.material.opacity = Math.max(0.3, 0.78 - this.y * 0.25);
+    this.shadow.material.opacity = Math.max(0.3, 0.78 - this.airOffset * 0.25);
+  }
+
+  collideProps(colliders) {
+    const p = this.pos;
+    for (const c of colliders) {
+      const dx = p.x - c.x, dz = p.z - c.z;
+      const rr = RADIUS + c.r;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < rr * rr && d2 > 1e-9) {
+        const d = Math.sqrt(d2);
+        p.x += (dx / d) * (rr - d);
+        p.z += (dz / d) * (rr - d);
+      }
+    }
   }
 
   collide(dng, colliders) {
@@ -304,15 +364,6 @@ export class Player {
         }
       }
     }
-    for (const c of colliders) {
-      const dx = p.x - c.x, dz = p.z - c.z;
-      const rr = RADIUS + c.r;
-      const d2 = dx * dx + dz * dz;
-      if (d2 < rr * rr && d2 > 1e-9) {
-        const d = Math.sqrt(d2);
-        p.x += (dx / d) * (rr - d);
-        p.z += (dz / d) * (rr - d);
-      }
-    }
+    this.collideProps(colliders);
   }
 }

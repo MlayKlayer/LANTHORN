@@ -33,10 +33,17 @@ ES modules don't load from `file://`.
 | WASD | move |
 | Mouse | look (click to capture the pointer) |
 | Shift | run (stamina) |
+| Space | jump · C | crouch (slower, quieter) |
 | E / Enter | interact · advance dialogue |
 | Tab / I | inventory (arrows to navigate, E to use) |
-| LMB | swing the sword, if you've found and equipped it |
+| LMB | swing the sword (right hand), if equipped |
+| F | crank-lantern beam (right hand) · V | hand-crank its spring |
+| R | wave-drum radar (right hand) |
+| O | settings (filters, fullscreen, look, bob, volume, quit) |
 | Esc | pause |
+
+The lamp lives in your **left** hand; your **right** hand holds one item at a
+time — sword, beam-lantern, or wave-drum — and equipping one puts the others away.
 
 ## What's down there
 
@@ -57,16 +64,39 @@ ES modules don't load from `file://`.
 - **The count** — when the dread is high enough, you will hear a second set
   of footsteps. They do not go around walls. Reach light, or read the psalm,
   or keep walking. It walks at a walking pace.
+- **The Black Pines** (floor IV) — an open, fogbound pine forest under the
+  world. No walls, no ceiling, Silent-Hill fog; periodic rain rolls in with
+  rolling thunder and closes your sight. Watchtowers sound long, grieving
+  sirens across the trees.
+- **Your shadow** — look down at it, and keep looking.
+- **The Folded Hour** — a found item that creases you sideways into one of
+  three endless, repeating **pocket dimensions**, chosen at random. Use it
+  again, in there, to fold back exactly where you were standing:
+  - *The Mire of Hours* — an endless rust meadow of blue flowers under a hard
+    blue sky, with pale monoliths on a horizon that never gets closer.
+  - *The Tenantless Stair* — an infinite staircase in the void that turns at
+    every landing. Jump the railing and you fall, and shortly evaporate home.
+  - *The Recurrent Nave* — black water and identical pillars, forever.
 
 Progress (floor, inventory, story flags) is saved in `localStorage` whenever
 you rest or descend.
+
+## Settings
+
+Press **O** (title, pause, or in-game) for: visual **filter** (CRT / VHS with
+live timecode + tracking / clean), internal **resolution**, **gloom**
+(brightness), **look speed**, **head bob**, **volume**, **film grain**,
+**fullscreen**, and **quit to menu**.
 
 ## Code map
 
 | File | What it does |
 |---|---|
-| `js/main.js` | game states, floor transitions, interaction, death/ending |
-| `js/dungeon.js` | seeded room+corridor generator, themes, finale chamber |
+| `js/main.js` | game states, floor transitions, interaction, weather, dimensions, death/ending |
+| `js/dimensions.js` | the three endless pocket dimensions (field / stair / flood) |
+| `js/weather.js` | periodic rain particle system |
+| `js/settings.js` | persisted settings (filters, resolution, look, bob, volume, fullscreen) |
+| `js/dungeon.js` | seeded room+corridor generator, themes, forest, finale chamber |
 | `js/builder.js` | merged level geometry, prop/light/item/NPC placement |
 | `js/props.js` | low-poly prop library (braziers, coffins, terminals, lift…) |
 | `js/textures.js` | all textures, drawn to 64px canvases at load |

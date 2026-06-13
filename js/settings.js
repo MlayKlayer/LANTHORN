@@ -67,9 +67,17 @@ export const SETTING_DEFS = [
     ],
     hint: 'the dust on the lens',
   },
+  {
+    id: 'fullscreen', label: 'FULLSCREEN',
+    options: [
+      { label: 'OFF', value: 0 },
+      { label: 'ON', value: 1 },
+    ],
+    hint: 'fill the whole screen with the dark',
+  },
 ];
 
-const DEFAULTS = { filter: 'crt', resolution: 240, brightness: 1.0, look: 1.0, bob: 1.0, volume: 0.8, grain: 1 };
+const DEFAULTS = { filter: 'crt', resolution: 240, brightness: 1.0, look: 1.0, bob: 1.0, volume: 0.8, grain: 1, fullscreen: 0 };
 
 export const Settings = {
   data: { ...DEFAULTS },

@@ -152,21 +152,25 @@ export function generate(seedStr, floor) {
     if (d > bestD) { bestD = d; keyRoom = r; }
   }
 
+  // the lift shaft rises through the ceiling at the exit-room centre
+  const shaft = { i: exitRoom.ci, j: exitRoom.cj };
+
   const dng = {
     W, H, open, roomIdOf, height, rooms, doorways,
-    spawnRoom, exitRoom, keyRoom,
+    spawnRoom, exitRoom, keyRoom, shaft,
     finale: false,
     isSolid(i, j) { return !inb(i, j) || open[idx(i, j)] === 0; },
     heightAt(i, j) { return inb(i, j) ? height[idx(i, j)] : 0; },
     roomAt(i, j) { return inb(i, j) ? roomIdOf[idx(i, j)] : -1; },
     openType(i, j) { return inb(i, j) ? open[idx(i, j)] : 0; },
+    isShaft(i, j) { return shaft && i === shaft.i && j === shaft.j; },
   };
   return dng;
 }
 
 // Floor IV: a pine forest under the world, fogbound, watched from towers.
 function generateForest(rng) {
-  const W = 48, H = 48;
+  const W = 74, H = 74;
   const open = new Uint8Array(W * H);
   const roomIdOf = new Int16Array(W * H).fill(-1);
   const height = new Float32Array(W * H);
@@ -198,13 +202,13 @@ function generateForest(rng) {
 
   const mid = Math.floor(W / 2);
   const spawnRoom = carveClearing(mid, 6, 2);
-  const exitRoom = carveClearing(mid + rng.int(-6, 6), H - 7, 2);
-  for (let k = 0; k < 4; k++) {
-    for (let tries = 0; tries < 30; tries++) {
-      const ci = rng.int(7, W - 8), cj = rng.int(11, H - 11);
-      const farEnough = rooms.every(r => Math.abs(r.ci - ci) + Math.abs(r.cj - cj) > 11);
+  const exitRoom = carveClearing(mid + rng.int(-8, 8), H - 7, 2);
+  for (let k = 0; k < 7; k++) {
+    for (let tries = 0; tries < 40; tries++) {
+      const ci = rng.int(8, W - 9), cj = rng.int(12, H - 13);
+      const farEnough = rooms.every(r => Math.abs(r.ci - ci) + Math.abs(r.cj - cj) > 13);
       if (!farEnough) continue;
-      carveClearing(ci, cj, 2);
+      carveClearing(ci, cj, rng.int(2, 3));
       break;
     }
   }
@@ -230,11 +234,11 @@ function generateForest(rng) {
 
   // watchtowers, off the path, spaced apart
   const towers = [];
-  for (let tries = 0; tries < 80 && towers.length < 4; tries++) {
-    const i = rng.int(6, W - 7), j = rng.int(8, H - 9);
+  for (let tries = 0; tries < 120 && towers.length < 5; tries++) {
+    const i = rng.int(7, W - 8), j = rng.int(9, H - 10);
     if (pathSet.has(idx(i, j))) continue;
     if (rooms.some(r => Math.abs(r.ci - i) + Math.abs(r.cj - j) < 6)) continue;
-    if (towers.some(t => Math.abs(t.i - i) + Math.abs(t.j - j) < 13)) continue;
+    if (towers.some(t => Math.abs(t.i - i) + Math.abs(t.j - j) < 16)) continue;
     towers.push({ i, j, x: (i + 0.5) * CELL, z: (j + 0.5) * CELL });
   }
 
